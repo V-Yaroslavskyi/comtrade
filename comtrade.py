@@ -1,13 +1,14 @@
 from io import StringIO
 import configparser
 from time import sleep
+
+import psycopg2
 from requests import *
 import pandas as pd
-# import psycopg2
-import pymssql
 
 dbconfig = configparser.ConfigParser()
 dbconfig.read("settings.conf")
+
 url = "http://comtrade.un.org/api/get"
 periods = []
 mon = [("0" + str(i))[-2:] for i in range(1, 13)]
@@ -30,13 +31,25 @@ while 1:
 for i in years:
     for j in mon:
         periods += [str(i)+j]
-# db = psycopg2.connect("postgresql://admin:admin@localhost:5432/comtrade_data")
 server =   dbconfig.get("DB section", "server")
 user =     dbconfig.get("DB section", "user")
 password = dbconfig.get("DB section", "password")
 dbname =   dbconfig.get("DB section", "dbname")
 
-db = pymssql.connect(server, user, password, "tempdb")
+try:
+    if dbconfig.get("DB section", "ODBC") == "PostgreSQL":
+        from psycopg2 import connect, IntegrityError, OperationalError
+        db = connect("postgresql://" + user + ":" + password + "@" + server + "/" + dbname)
+    elif dbconfig.get("DB section", "ODBC") == "MSSQL":
+        from pymssql import connect, IntegrityError, OperationalError
+        db = connect(server, user, password, dbname)
+    else:
+        print("This ODBC not supported")
+        exit()
+except OperationalError:
+    print("Cannot connect to database")
+    exit()
+
 cur = db.cursor()
 
 for period in periods:
@@ -57,7 +70,6 @@ for period in periods:
     except ConnectionError as e:
         print("Connection error: cannot make request.")
         exit()
-    print(r.url)
     csvData = str(r.content)[2:-1]
     csvData = csvData.replace("\\r\\n", " \n")
     if "No data matches your query or your query" in csvData:
@@ -65,7 +77,6 @@ for period in periods:
         continue
     data = pd.read_csv(StringIO(csvData))
     headers = ",".join(['"' + i + '"' for i in data])
-    print(headers)
     for row in data.as_matrix():
         qarr = []
         for i in row:
@@ -81,7 +92,8 @@ for period in periods:
         try:
             cur.execute(query)
             db.commit()
-        except pymssql.IntegrityError:
+        except IntegrityError:
             db.rollback()
     print("Downloading successful for " + period)
+
 db.close()
